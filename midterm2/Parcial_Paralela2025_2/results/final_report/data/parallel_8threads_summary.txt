@@ -1,0 +1,21 @@
+Loaded 42 puzzles. Running sequential and parallel.
+
+=== EXECUTION SUMMARY ===
+Puzzles: 42
+Threads: 8
+Sequential wall time (ms): 3003.621
+Parallel wall time (ms):   1333.000
+Speedup (wall): 2.253x
+Efficiency: 28.166 %
+Sequential total nodes: 1695853
+Parallel total nodes:   1695853
+
+=== NODES PER THREAD ===
+Thread 0: nodes=432576, sum_puzzle_ms=879.446
+Thread 1: nodes=178546, sum_puzzle_ms=1160.165
+Thread 2: nodes=209758, sum_puzzle_ms=1284.813
+Thread 3: nodes=209380, sum_puzzle_ms=1246.798
+Thread 4: nodes=130350, sum_puzzle_ms=977.430
+Thread 5: nodes=62150, sum_puzzle_ms=521.552
+Thread 6: nodes=207059, sum_puzzle_ms=1229.642
+Thread 7: nodes=266034, sum_puzzle_ms=1332.326

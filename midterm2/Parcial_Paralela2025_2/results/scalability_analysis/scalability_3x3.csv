@@ -1,0 +1,16 @@
+Algorithm,Board_Size,Puzzle_Index,Solution_Length,Execution_Time_ms,Nodes_Expanded,Solvable,Timeout
+0,0,ABCDEFG#H,1,0.026,4,true,BFS
+1,0,ABCDEF#GH,2,0.012,7,true,BFS
+2,0,ABCDE#FGH,13,3.67,2710,true,BFS
+3,0,ABCD#EFGH,14,8.028,6027,true,BFS
+4,0,ABC#DEFGH,15,11.611,8431,true,BFS
+0,0,ABCDEFG#H,1,0.004,2,true,A*-h1
+1,0,ABCDEF#GH,2,0.005,3,true,A*-h1
+2,0,ABCDE#FGH,13,0.089,60,true,A*-h1
+3,0,ABCD#EFGH,14,0.12,90,true,A*-h1
+4,0,ABC#DEFGH,15,0.159,100,true,A*-h1
+0,0,ABCDEFG#H,1,0.004,2,true,A*-h2
+1,0,ABCDEF#GH,2,0.009,3,true,A*-h2
+2,0,ABCDE#FGH,13,0.198,139,true,A*-h2
+3,0,ABCD#EFGH,14,0.369,263,true,A*-h2
+4,0,ABC#DEFGH,15,0.439,317,true,A*-h2

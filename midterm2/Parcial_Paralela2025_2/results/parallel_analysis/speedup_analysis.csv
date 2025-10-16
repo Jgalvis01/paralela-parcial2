@@ -1,0 +1,4 @@
+Threads,Sequential_Time_ms,Parallel_Time_ms,Speedup,Efficiency_%,Theoretical_Speedup,Parallel_Overhead_ms
+2,2516.170,2749.219,0.915,45.75,2,2982.268
+4,2516.170,3620.170,0.695,17.38,4,11964.510
+8,2516.170,8112.714,0.310,3.88,8,62385.542

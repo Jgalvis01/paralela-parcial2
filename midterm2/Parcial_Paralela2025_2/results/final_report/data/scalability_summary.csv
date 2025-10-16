@@ -1,0 +1,10 @@
+Board_Size,Algorithm,Avg_Time_ms,Avg_Nodes,Success_Rate_%,Timeout_Rate_%
+3x3,BFS,N/A,N/A,0,0
+3x3,A*-h1,N/A,N/A,0,0
+3x3,A*-h2,N/A,N/A,0,0
+4x4,BFS,0.022,10,0,0
+4x4,A*-h1,0.011,3,0,0
+4x4,A*-h2,0.012,3,0,0
+5x5,BFS,N/A,N/A,0,0
+5x5,A*-h1,N/A,N/A,0,0
+5x5,A*-h2,N/A,N/A,0,0

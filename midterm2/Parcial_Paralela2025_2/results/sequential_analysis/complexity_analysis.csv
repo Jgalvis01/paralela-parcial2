@@ -1,0 +1,10 @@
+Algorithm,Moves_Range,Puzzle_Count,Avg_Time_ms,Avg_Nodes,Success_Rate_%
+BFS,Simple(≤4),20,0.064,26,90.91
+BFS,Medium(5-8),11,1.570,804,100.00
+BFS,Complex(>8),9,460.057,161389,100.00
+A*-h1,Simple(≤4),20,0.009,4,100.00
+A*-h1,Medium(5-8),11,0.022,10,100.00
+A*-h1,Complex(>8),11,0.223,94,100.00
+A*-h2,Simple(≤4),20,0.010,4,100.00
+A*-h2,Medium(5-8),11,0.028,13,100.00
+A*-h2,Complex(>8),11,2.129,764,100.00

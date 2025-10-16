@@ -1,0 +1,4 @@
+Algorithm,Total_Puzzles,Solved_Puzzles,Success_Rate_%,Avg_Time_ms,Avg_Nodes_Expanded,Min_Time_ms,Max_Time_ms,Std_Dev_Time
+BFS,42,40,95.24,138.220,36547,0.013,1327.570,325.377
+A*-h1,42,42,100.00,0.095,29,0.007,1.811,0.286
+A*-h2,42,42,100.00,0.558,205,0.005,17.279,2.641

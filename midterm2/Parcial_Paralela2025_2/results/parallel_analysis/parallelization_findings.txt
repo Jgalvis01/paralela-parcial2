@@ -1,0 +1,39 @@
+ANÁLISIS DE PARALELIZACIÓN CON OPENMP
+
+1. ESTRATEGIA IMPLEMENTADA:
+   - Descomposición de dominio (data decomposition)
+   - Cada hilo procesa un subconjunto de puzzles independiente
+   - Scheduling dinámico para balanceo automático de carga
+
+2. JUSTIFICACIÓN DE LA ESTRATEGIA:
+   - Los puzzles son independientes entre sí
+   - No requiere sincronización durante el procesamiento
+   - Evita la complejidad de paralelizar BFS internamente
+   - Escalable hasta el número de puzzles disponibles
+
+3. IMPLEMENTACIÓN TÉCNICA:
+   #pragma omp parallel for schedule(dynamic) shared(puzzles, results)
+   - schedule(dynamic): Balanceo automático de carga
+   - omp_get_wtime(): Medición precisa de tiempo
+   - Variables compartidas para datos y resultados
+
+4. CÁLCULO DE MÉTRICAS:
+
+   Speedup = Tiempo_Secuencial / Tiempo_Paralelo
+   Eficiencia = (Speedup / Número_Hilos) × 100%
+   
+   Donde:
+   - Tiempo_Secuencial: Ejecución con 1 hilo
+   - Tiempo_Paralelo: Ejecución con N hilos
+   - Eficiencia óptima = 100% (speedup lineal)
+
+5. LIMITACIONES OBSERVADAS:
+   - Overhead de gestión de hilos
+   - Desbalance de carga con puzzles de complejidad variable
+   - Contención de memoria con muchos hilos
+   - Diminishing returns después del punto óptimo
+
+6. CONFIGURACIÓN ÓPTIMA:
+   - Basado en los resultados, determinar número óptimo de hilos
+   - Balance entre speedup y eficiencia
+   - Consideraciones de recursos del sistema

@@ -1,0 +1,27 @@
+ANÁLISIS TEÓRICO DE ESCALABILIDAD
+
+1. ESPACIO DE ESTADOS POR TAMAÑO:
+   - 3x3: ~181,440 estados posibles
+   - 4x4: ~20,922,789 estados posibles  
+   - 5x5: ~25,852,016,738 estados posibles
+
+2. FACTOR DE CRECIMIENTO:
+   - 3x3 → 4x4: ~115x más estados
+   - 4x4 → 5x5: ~1,235x más estados
+
+3. COMPLEJIDAD TEMPORAL ESPERADA:
+   - BFS: O(b^d) donde b=branching factor, d=depth
+   - A*: O(b^d) en peor caso, mejorado por heurística
+   - Branching factor típico: ~2.13 (promedio de movimientos posibles)
+
+4. LIMITACIONES PRÁCTICAS:
+   - 3x3: Factible para todos los algoritmos
+   - 4x4: Factible con limitaciones de memoria/tiempo
+   - 5x5: Requiere algoritmos optimizados y mucha memoria
+   - 6x6+: Generalmente impracticable con búsqueda completa
+
+5. RECOMENDACIONES:
+   - Para puzzles >4x4: Usar algoritmos aproximados o búsqueda limitada
+   - Implementar pruning más agresivo
+   - Considerar algoritmos iterative deepening
+   - Usar heurísticas más informativas para A*

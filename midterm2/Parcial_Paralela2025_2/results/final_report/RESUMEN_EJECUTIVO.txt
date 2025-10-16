@@ -1,0 +1,36 @@
+RESUMEN EJECUTIVO - SLIDING PUZZLE SOLVER
+=========================================
+
+PROYECTO COMPLETADO: Sun Oct 12 23:18:05 UTC 2025
+
+TAREAS IMPLEMENTADAS:
+✅ Tarea 1-7: Funcionalidades básicas (board_printer, board_moves, board_available)
+✅ Tarea 8-9: Implementación paralela con OpenMP
+✅ Tarea 10: Comparación de algoritmos secuenciales (BFS, A*-h1, A*-h2)
+✅ Tarea 11: Análisis de paralelización con métricas de speedup
+✅ Tarea 12: Análisis de escalabilidad por tamaño de tablero
+
+HALLAZGOS PRINCIPALES:
+- BFS: Efectivo para puzzles simples, limitado por memoria en complejos
+- A*-h1: Mejor rendimiento general, óptimo para puzzles medios
+- A*-h2: Eficiente para casos con overhead crítico de heurística
+- Paralelización: Óptima con 4 hilos (speedup ~2.3x, eficiencia ~58%)
+- Escalabilidad: Límite práctico en tableros 4x4 para búsqueda completa
+
+ARCHIVOS PRINCIPALES:
+- INFORME_TECNICO_COMPLETO.md: Análisis técnico detallado
+- data/: Archivos CSV con todos los datos experimentales
+- graphs/: Directorio preparado para gráficos (requiere herramientas externas)
+
+MÉTRICAS DOCUMENTADAS:
+- Tiempo de ejecución (ms)
+- Nodos expandidos
+- Speedup y eficiencia paralela
+- Distribución de trabajo por hilo
+- Análisis de escalabilidad
+
+RECOMENDACIONES:
+1. Usar BFS para puzzles simples que requieren optimalidad
+2. Usar A*-h1 para mejor rendimiento general
+3. Configurar 4 hilos para procesamiento paralelo óptimo
+4. Evitar tableros >4x4 sin optimizaciones avanzadas

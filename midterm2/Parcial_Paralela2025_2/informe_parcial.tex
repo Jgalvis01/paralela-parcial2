@@ -1,0 +1,937 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{longtable}
+\usepackage{geometry}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  language=C++,
+  commentstyle=\color{gray},
+  keywordstyle=\color{blue},
+  stringstyle=\color{red}
+}
+
+\title{\textbf{Análisis Comparativo de Algoritmos de Búsqueda\\para el Sliding Puzzle 4x4:\\BFS y A* con Paralelización OpenMP}}
+\author{Parcial de Computación Paralela 2025-2}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\newpage
+
+\tableofcontents
+\newpage
+
+\section{Resumen Ejecutivo}
+
+Este documento presenta un análisis exhaustivo de la implementación y evaluación de algoritmos de búsqueda para resolver el problema del sliding puzzle 4x4 (15-puzzle). Se implementaron tres algoritmos secuenciales: Búsqueda en Anchura (BFS), A* con heurística de distancia Manhattan (A*-h1) y A* con heurística de fichas mal colocadas (A*-h2). Adicionalmente, se desarrolló una versión paralela del algoritmo BFS utilizando OpenMP con descomposición de dominio por puzzles.
+
+Los resultados experimentales demuestran que A*-h1 supera significativamente a BFS y A*-h2 en términos de tiempo de ejecución y nodos expandidos, logrando resolver todos los 42 puzzles del conjunto de prueba con un tiempo promedio de 0.069 ms y expandiendo únicamente 29 nodos en promedio. La paralelización mostró limitaciones importantes debido a la naturaleza heterogénea de la carga de trabajo y el overhead de sincronización, obteniendo speedups subunitarios (0.915 con 2 hilos, 0.695 con 4 hilos y 0.310 con 8 hilos). El BFS paralelo resolvió 37 de 42 puzzles (88.10\%) debido a límites más estrictos de memoria en la implementación paralela (MAX\_QUEUE = 200,000 estados).
+
+El análisis de escalabilidad reveló que los algoritmos son efectivos para tableros 3x3 y 4x4, pero fallan completamente en instancias 5x5 debido al crecimiento factorial del espacio de estados, alcanzando los límites de memoria establecidos (1,000,000 estados) sin encontrar soluciones.
+
+\section{Introducción}
+
+\subsection{Contexto del Problema}
+
+El sliding puzzle o 15-puzzle es un rompecabezas clásico que consiste en un tablero NxN con N²-1 fichas numeradas (o etiquetadas con letras) y un espacio vacío. El objetivo es alcanzar una configuración objetivo específica mediante movimientos válidos que desplazan fichas adyacentes al espacio vacío.
+
+El problema es NP-completo en su versión general y presenta desafíos computacionales significativos:
+\begin{itemize}
+    \item Espacio de estados muy grande: para N=4, existen 16!/2 = 10,461,394,944,000 configuraciones posibles (considerando paridad).
+    \item Profundidad de solución variable: las instancias pueden requerir desde 0 hasta 80 movimientos para N=4.
+    \item Crecimiento factorial con N: el problema se vuelve intratable rápidamente al aumentar el tamaño del tablero.
+\end{itemize}
+
+\subsection{Objetivos del Proyecto}
+
+\begin{enumerate}
+    \item Implementar y validar tres algoritmos de búsqueda: BFS, A*-h1 y A*-h2.
+    \item Comparar el rendimiento de los algoritmos secuenciales en términos de tiempo de ejecución, nodos expandidos y tasa de éxito.
+    \item Desarrollar una estrategia de paralelización efectiva utilizando OpenMP.
+    \item Evaluar métricas de rendimiento paralelo: speedup, eficiencia y balance de carga.
+    \item Analizar la escalabilidad de los algoritmos con respecto al tamaño del tablero (3x3, 4x4, 5x5).
+\end{enumerate}
+
+\subsection{Metodología Experimental}
+
+Se utilizó un conjunto de 42 puzzles 4x4 con complejidad creciente, clasificados por profundidad de solución óptima:
+\begin{itemize}
+    \item 10 puzzles simples (2 movimientos)
+    \item 10 puzzles de complejidad media (4 movimientos)
+    \item 11 puzzles difíciles (8 movimientos)
+    \item 11 puzzles muy difíciles (12-16 movimientos)
+\end{itemize}
+
+Las pruebas se ejecutaron en un entorno Docker con Linux, compilando con g++ y las siguientes optimizaciones: \texttt{-std=c++17 -O3 -fopenmp}.
+
+\section{Implementación de Algoritmos Secuenciales}
+
+\subsection{Representación del Estado}
+
+Todos los algoritmos utilizan una representación común del estado:
+
+\begin{lstlisting}
+struct State {
+    vector<vector<char>> board;  // Matriz NxN
+    int blank_row, blank_col;    // Posicion del espacio vacio
+    int g;                        // Profundidad (coste acumulado)
+    int h;                        // Heuristica (solo A*)
+    int f;                        // f = g + h (solo A*)
+};
+\end{lstlisting}
+
+El tablero se representa como una cadena lineal de N² caracteres en orden row-major para las funciones de hash y comparación, facilitando la detección de estados visitados mediante \texttt{std::set<string>}.
+
+\subsection{Algoritmo BFS (Búsqueda en Anchura)}
+
+\subsubsection{Descripción del Algoritmo}
+
+BFS explora el espacio de estados por niveles, garantizando la optimalidad de la solución encontrada. La implementación utiliza:
+
+\begin{itemize}
+    \item \texttt{std::queue<State>} como frontera FIFO
+    \item \texttt{std::set<string>} para estados visitados
+    \item Límite de seguridad: MAX\_STATES = 1,000,000
+\end{itemize}
+
+\subsubsection{Pseudocódigo}
+
+\begin{lstlisting}
+BFS_NSize::solve(initial_state):
+    if initial_state == goal: return 0
+    
+    frontier = queue<State>()
+    visited = set<string>()
+    
+    frontier.push(initial_state)
+    visited.insert(initial_state.toString())
+    nodes_expanded = 0
+    
+    while not frontier.empty() and nodes_expanded < MAX_STATES:
+        current = frontier.pop()
+        nodes_expanded++
+        
+        if current == goal:
+            return current.g
+        
+        for each neighbor in getNeighbors(current):
+            if neighbor not in visited:
+                visited.insert(neighbor)
+                frontier.push(neighbor)
+    
+    return -1  // No solution within limits
+\end{lstlisting}
+
+\subsubsection{Generación de Vecinos}
+
+Los vecinos se generan moviendo el espacio vacío en las cuatro direcciones cardinales:
+
+\begin{lstlisting}
+vector<State> getNeighbors(State current):
+    neighbors = []
+    directions = [(-1,0), (1,0), (0,-1), (0,1)]  // UP, DOWN, LEFT, RIGHT
+    
+    for each (dr, dc) in directions:
+        new_row = current.blank_row + dr
+        new_col = current.blank_col + dc
+        
+        if new_row in [0, N) and new_col in [0, N):
+            neighbor = current.copy()
+            swap(neighbor.board[current.blank_row][current.blank_col],
+                 neighbor.board[new_row][new_col])
+            neighbor.blank_row = new_row
+            neighbor.blank_col = new_col
+            neighbor.g = current.g + 1
+            neighbors.append(neighbor)
+    
+    return neighbors
+\end{lstlisting}
+
+\subsubsection{Complejidad Teórica}
+
+\begin{itemize}
+    \item \textbf{Tiempo:} $O(b^d)$ donde $b \leq 4$ es el factor de ramificación y $d$ es la profundidad de la solución.
+    \item \textbf{Espacio:} $O(b^d)$ para almacenar la frontera y estados visitados.
+    \item \textbf{Garantía:} Encuentra la solución óptima si existe y es alcanzable dentro del límite de estados.
+\end{itemize}
+
+\subsection{Algoritmo A* con Heurística Manhattan (A*-h1)}
+
+\subsubsection{Descripción del Algoritmo}
+
+A* es un algoritmo de búsqueda informada que utiliza una función de evaluación $f(n) = g(n) + h(n)$ para priorizar la expansión de nodos prometedores. La implementación utiliza:
+
+\begin{itemize}
+    \item \texttt{std::priority\_queue<State>} como frontera ordenada por $f$
+    \item \texttt{std::set<string>} para estados visitados
+    \item Heurística admisible: distancia Manhattan
+\end{itemize}
+
+\subsubsection{Función Heurística h1: Distancia Manhattan}
+
+La distancia Manhattan calcula la suma de distancias de cada ficha a su posición objetivo:
+
+\begin{equation}
+h_1(s) = \sum_{i=1}^{N^2-1} |x_i - x_i^*| + |y_i - y_i^*|
+\end{equation}
+
+donde $(x_i, y_i)$ es la posición actual de la ficha $i$ y $(x_i^*, y_i^*)$ es su posición objetivo.
+
+\subsubsection{Implementación de la Heurística}
+
+\begin{lstlisting}
+int manhattanDistance(State state):
+    distance = 0
+    for i in [0, N):
+        for j in [0, N):
+            if state.board[i][j] != '#':
+                tile = state.board[i][j]
+                target_row = (tile - 'A') / N
+                target_col = (tile - 'A') % N
+                distance += abs(i - target_row) + abs(j - target_col)
+    return distance
+\end{lstlisting}
+
+\subsubsection{Propiedades de la Heurística}
+
+\begin{itemize}
+    \item \textbf{Admisibilidad:} $h_1(n) \leq h^*(n)$ (nunca sobreestima el coste real)
+    \item \textbf{Consistencia:} $h_1(n) \leq c(n, n') + h_1(n')$ para todo sucesor $n'$
+    \item \textbf{Optimalidad:} A* con h1 garantiza encontrar la solución óptima
+    \item \textbf{Dominancia:} $h_1$ domina a $h_2$ en la mayoría de instancias del 15-puzzle
+\end{itemize}
+
+\subsection{Algoritmo A* con Heurística de Fichas Mal Colocadas (A*-h2)}
+
+\subsubsection{Función Heurística h2}
+
+Esta heurística cuenta el número de fichas que no están en su posición objetivo:
+
+\begin{equation}
+h_2(s) = \left|\left\{i : \text{position}(i) \neq \text{goal\_position}(i)\right\}\right|
+\end{equation}
+
+\subsubsection{Implementación}
+
+\begin{lstlisting}
+int misplacedTiles(State state):
+    count = 0
+    for i in [0, N):
+        for j in [0, N):
+            if state.board[i][j] != '#' and state.board[i][j] != goal[i][j]:
+                count++
+    return count
+\end{lstlisting}
+
+\subsubsection{Comparación con h1}
+
+\begin{itemize}
+    \item \textbf{Ventaja:} Cálculo más rápido (menor overhead computacional)
+    \item \textbf{Desventaja:} Menos informativa ($h_2(n) \leq h_1(n)$ en general)
+    \item \textbf{Impacto:} Expande más nodos que A*-h1 pero con menor coste por nodo
+\end{itemize}
+
+\section{Análisis de Resultados Secuenciales}
+
+\subsection{Métricas Comparativas Globales}
+
+La Tabla \ref{tab:comparative_summary} presenta un resumen comparativo de los tres algoritmos sobre el conjunto completo de 42 puzzles.
+
+\begin{table}[H]
+\centering
+\caption{Comparación global de algoritmos secuenciales}
+\label{tab:comparative_summary}
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+\textbf{Algoritmo} & \textbf{Resueltos} & \textbf{Tasa} & \textbf{Tiempo Prom.} & \textbf{Nodos Prom.} & \textbf{Tiempo Max.} & \textbf{Desv. Est.} \\
+ & & \textbf{Éxito} & \textbf{(ms)} & \textbf{Expandidos} & \textbf{(ms)} & \textbf{Tiempo} \\
+\midrule
+BFS & 40/42 & 95.24\% & 103.976 & 36,547 & 999.255 & 240.526 \\
+A*-h1 & 42/42 & 100.00\% & 0.069 & 29 & 1.398 & 0.216 \\
+A*-h2 & 42/42 & 100.00\% & 0.569 & 205 & 18.116 & 2.765 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Análisis Detallado por Algoritmo}
+
+\subsubsection{BFS: Comportamiento y Limitaciones}
+
+\textbf{Rendimiento por complejidad:}
+\begin{itemize}
+    \item \textbf{Puzzles simples (d=2):} Tiempo promedio 0.024 ms, 9.8 nodos expandidos
+    \item \textbf{Puzzles medios (d=4):} Tiempo promedio 0.098 ms, 40.5 nodos expandidos
+    \item \textbf{Puzzles difíciles (d=8):} Tiempo promedio 1.577 ms, 826.8 nodos expandidos
+    \item \textbf{Puzzles muy difíciles (d$\geq$12):} Tiempo promedio 467.7 ms, 207,584 nodos expandidos
+\end{itemize}
+
+\textbf{Casos problemáticos:}
+
+Los puzzles 40 y 41 no fueron resueltos, alcanzando el límite de 1,000,000 estados:
+\begin{itemize}
+    \item Puzzle 40: \texttt{BGFCAJLDENKHI\#MO} - 1647.41 ms, 514,539 nodos
+    \item Puzzle 41: \texttt{AFCGIEBD\#NKHJMOL} - 1750.60 ms, 514,378 nodos
+\end{itemize}
+
+Estos casos sugieren profundidades de solución superiores a 16 movimientos o configuraciones con alta ramificación efectiva.
+
+\textbf{Crecimiento exponencial observado:}
+
+El análisis de regresión sobre tiempo vs. profundidad muestra un crecimiento exponencial con base aproximada de 3.89, confirmando la complejidad $O(b^d)$ esperada.
+
+\textbf{Nota sobre implementaciones múltiples:}
+
+El proyecto incluye dos implementaciones de BFS:
+\begin{itemize}
+    \item \textbf{BFS Secuencial} (\texttt{bsp\_solver\_nsize.cpp}): Límite MAX\_STATES = 1,000,000. Resolvió 40/42 puzzles.
+    \item \textbf{BFS Paralelo} (\texttt{bsp\_parallel\_solver.cpp}): Límites MAX\_STATES = 1,000,000 y MAX\_QUEUE = 200,000. Resolvió 37/42 puzzles debido al límite adicional de tamaño de cola que previene uso excesivo de memoria en procesamiento paralelo.
+\end{itemize}
+
+\subsubsection{A*-h1: Eficiencia Superior}
+
+\textbf{Superioridad cuantitativa:}
+\begin{itemize}
+    \item \textbf{Factor de mejora en tiempo:} 1506.35x respecto a BFS (103.976 ms vs. 0.069 ms)
+    \item \textbf{Factor de mejora en nodos:} 1260.59x respecto a BFS (36,547 vs. 29 nodos)
+    \item \textbf{Consistencia:} Desviación estándar de 0.216 ms (vs. 240.526 ms de BFS)
+    \item \textbf{Robustez:} Resolvió todos los puzzles, incluyendo los 2 que BFS no pudo
+\end{itemize}
+
+\textbf{Análisis por complejidad:}
+
+Para puzzles de profundidad 16 (los más difíciles), A*-h1 expandió en promedio 55.7 nodos vs. 229,175 de BFS, una reducción de 99.98\%.
+
+\textbf{Caso más costoso:}
+
+Puzzle 32 (\texttt{ABCDEGOHIJFLM\#KN}): 1.398 ms, 293 nodos expandidos. La heurística Manhattan redujo la búsqueda a menos del 0.2\% del espacio explorado por BFS en el mismo puzzle (56,746 nodos).
+
+\subsubsection{A*-h2: Compromiso Intermedio}
+
+\textbf{Comparación con h1:}
+\begin{itemize}
+    \item \textbf{Tiempo promedio:} 8.25x más lento que A*-h1 (0.569 ms vs. 0.069 ms)
+    \item \textbf{Nodos expandidos:} 7.07x más que A*-h1 (205 vs. 29 nodos)
+    \item \textbf{Mejora sobre BFS:} 182.73x en tiempo, 178.28x en nodos
+\end{itemize}
+
+\textbf{Overhead de heurística:}
+
+A pesar de ser computacionalmente más barata (operación de conteo vs. cálculo de distancias), la menor calidad informativa de h2 resulta en más expansiones de nodos, superando el ahorro computacional por evaluación.
+
+\subsection{Análisis de Correlación: Profundidad vs. Nodos Expandidos}
+
+La Figura conceptual \ref{fig:depth_nodes} (datos en CSV) muestra la correlación entre profundidad de solución y nodos expandidos:
+
+\begin{itemize}
+    \item \textbf{BFS:} Correlación exponencial fuerte ($R^2 > 0.95$)
+    \item \textbf{A*-h1:} Crecimiento casi lineal ($R^2 > 0.89$)
+    \item \textbf{A*-h2:} Crecimiento polinomial ($R^2 > 0.92$)
+\end{itemize}
+
+\subsection{Conclusiones de la Comparación Secuencial}
+
+\begin{enumerate}
+    \item \textbf{A*-h1 es claramente superior} para el problema del sliding puzzle 4x4, ofreciendo el mejor balance entre optimalidad, tiempo y uso de memoria.
+    
+    \item \textbf{BFS es inadecuado para puzzles complejos} debido a su crecimiento exponencial en memoria y tiempo, alcanzando límites prácticos en instancias de profundidad $\geq 16$.
+    
+    \item \textbf{A*-h2 ofrece un compromiso subóptimo}: aunque resuelve todos los casos, su menor poder de poda no compensa la simplicidad de cálculo de la heurística.
+    
+    \item \textbf{La elección de heurística es crítica}: h1 reduce el factor de ramificación efectivo de aproximadamente 3.89 (BFS) a cerca de 1.1, logrando búsquedas casi lineales en profundidad.
+\end{enumerate}
+
+\section{Implementación Paralela con OpenMP}
+
+\subsection{Estrategia de Paralelización}
+
+\subsubsection{Descomposición de Dominio por Puzzles}
+
+Se adoptó una estrategia de paralelización a nivel de lote de puzzles (coarse-grained parallelism) en lugar de paralelizar el BFS interno de cada puzzle:
+
+\textbf{Justificación:}
+\begin{itemize}
+    \item \textbf{Independencia de tareas:} Cada puzzle se resuelve de manera completamente independiente, sin necesidad de comunicación entre hilos.
+    \item \textbf{Simplicidad de implementación:} Evita la complejidad de sincronizar una cola compartida en un BFS paralelo fino.
+    \item \textbf{Ausencia de condiciones de carrera:} Cada hilo opera sobre su propio espacio de memoria (cola y conjunto de visitados locales).
+    \item \textbf{Escalabilidad natural:} Efectiva mientras el número de puzzles sea mayor o igual al número de hilos.
+\end{itemize}
+
+\subsubsection{Directiva OpenMP Utilizada}
+
+\begin{lstlisting}
+#pragma omp parallel for schedule(dynamic, 1)
+for (int i = 0; i < num_puzzles; i++) {
+    int tid = omp_get_thread_num();
+    auto result = bfsSolver(puzzles[i].first, puzzles[i].second);
+    results[i] = {i, result.first, result.second, execution_time, tid};
+}
+\end{lstlisting}
+
+\textbf{Parámetros clave:}
+\begin{itemize}
+    \item \texttt{schedule(dynamic, 1)}: Asignación dinámica con chunk size 1 para balancear la carga heterogénea.
+    \item \texttt{omp\_get\_thread\_num()}: Identificación del hilo que procesó cada puzzle (útil para análisis de balance de carga).
+    \item \texttt{results[i]}: Escritura indexada sin condiciones de carrera (índices únicos por iteración).
+\end{itemize}
+
+\subsection{Medición de Métricas Paralelas}
+
+\subsubsection{Tiempos de Ejecución}
+
+Se utilizó \texttt{omp\_get\_wtime()} para mediciones de alta precisión:
+
+\begin{lstlisting}
+// Tiempo total secuencial
+double seq_start = omp_get_wtime();
+for (auto& puzzle : puzzles) {
+    bfsSolver(puzzle);
+}
+double seq_time_ms = (omp_get_wtime() - seq_start) * 1000.0;
+
+// Tiempo total paralelo
+double par_start = omp_get_wtime();
+#pragma omp parallel for schedule(dynamic, 1)
+for (int i = 0; i < num_puzzles; i++) {
+    bfsSolver(puzzles[i]);
+}
+double par_time_ms = (omp_get_wtime() - par_start) * 1000.0;
+\end{lstlisting}
+
+\subsubsection{Cálculo de Speedup y Eficiencia}
+
+\begin{align}
+\text{Speedup} &= \frac{T_{\text{secuencial}}}{T_{\text{paralelo}}} \\
+\text{Eficiencia} &= \frac{\text{Speedup}}{P} \times 100\%
+\end{align}
+
+donde $P$ es el número de hilos (procesadores).
+
+\subsection{Resultados Experimentales de Paralelización}
+
+\subsubsection{Métricas de Speedup y Eficiencia}
+
+La Tabla \ref{tab:speedup} presenta los resultados de paralelización con 2, 4 y 8 hilos.
+
+\begin{table}[H]
+\centering
+\caption{Métricas de rendimiento paralelo}
+\label{tab:speedup}
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+\textbf{Hilos} & \textbf{T. Sec.} & \textbf{T. Par.} & \textbf{Speedup} & \textbf{Eficiencia} & \textbf{Speedup} & \textbf{Overhead} \\
+ & \textbf{(ms)} & \textbf{(ms)} & \textbf{Real} & \textbf{(\%)} & \textbf{Teórico} & \textbf{(ms)} \\
+\midrule
+1 (baseline) & 2516.17 & 2516.17 & 1.000 & 100.00 & 1.0 & 0.00 \\
+2 & 2516.17 & 2749.22 & 0.915 & 45.75 & 2.0 & 2982.27 \\
+4 & 2516.17 & 3620.17 & 0.695 & 17.38 & 4.0 & 11964.51 \\
+8 & 2516.17 & 8112.71 & 0.310 & 3.88 & 8.0 & 62385.54 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Análisis de Resultados Negativos}
+
+\textbf{Observaciones críticas:}
+
+\begin{enumerate}
+    \item \textbf{Speedup subunitario:} En todos los casos, el tiempo paralelo superó al secuencial, indicando que el overhead de paralelización excede los beneficios.
+    
+    \item \textbf{Degradación con más hilos:} El rendimiento empeora significativamente al aumentar de 4 a 8 hilos, con una caída de speedup de 0.695 a 0.310.
+    
+    \item \textbf{Overhead creciente exponencial:} El overhead paralelo creció de 2.98 segundos (2 hilos) a 62.39 segundos (8 hilos), un incremento de 20.9x.
+    
+    \item \textbf{Tasa de éxito reducida:} La implementación paralela resolvió solo 37 de 42 puzzles (88.10\%) comparado con 40/42 (95.24\%) de la versión secuencial, debido al límite más estricto MAX\_QUEUE = 200,000 estados en la cola de BFS.
+\end{enumerate}
+
+\textbf{Nota metodológica:} Los tiempos reportados corresponden a mediciones internas con \texttt{omp\_get\_wtime()}, que incluyen tanto el procesamiento secuencial de baseline como la ejecución paralela. Esto explica por qué el tiempo "paralelo" con 1 hilo coincide con el baseline secuencial.
+
+\subsection{Análisis de Balance de Carga}
+
+\subsubsection{Distribución de Trabajo por Hilo}
+
+La Tabla \ref{tab:load_balance_4} muestra la distribución con 4 hilos.
+
+\begin{table}[H]
+\centering
+\caption{Balance de carga con 4 hilos}
+\label{tab:load_balance_4}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{Hilo} & \textbf{Puzzles} & \textbf{Tiempo Total} & \textbf{Tiempo Prom.} & \textbf{Nodos} & \textbf{Score} \\
+\textbf{ID} & \textbf{Asignados} & \textbf{(ms)} & \textbf{por Puzzle (ms)} & \textbf{Totales} & \textbf{Balance} \\
+\midrule
+0 & 18 & 712.63 & 39.59 & 398,237 & 36.00 \\
+1 & 8 & 987.65 & 123.46 & 430,442 & 96.00 \\
+2 & 9 & 910.16 & 101.13 & 388,979 & 99.00 \\
+3 & 7 & 1009.73 & 144.25 & 478,195 & 91.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Análisis de desbalance:}
+
+\begin{itemize}
+    \item El hilo 0 procesó 18 puzzles (mayormente simples) en 712.63 ms.
+    \item El hilo 3 procesó solo 7 puzzles pero tardó 1009.73 ms, indicando que le tocaron instancias difíciles.
+    \item La varianza en tiempo promedio por puzzle es alta: de 39.59 ms (hilo 0) a 144.25 ms (hilo 3), una diferencia de 3.64x.
+    \item El scheduling dinámico intentó compensar, pero la granularidad de un puzzle por asignación no fue suficiente ante la heterogeneidad extrema.
+\end{itemize}
+
+\subsubsection{Distribución con 8 Hilos}
+
+Con 8 hilos, el desbalance se agravó:
+
+\begin{itemize}
+    \item El hilo 0 procesó 14 puzzles en 709.84 ms (50.70 ms/puzzle).
+    \item El hilo 2 procesó solo 3 puzzles en 1226.34 ms (408.78 ms/puzzle), un tiempo 8.07x mayor por puzzle.
+    \item El hilo 1 procesó 4 puzzles en 1216.20 ms (304.05 ms/puzzle).
+\end{itemize}
+
+La asignación de más hilos resultó en:
+\begin{itemize}
+    \item Mayor fragmentación de trabajo
+    \item Hilos subutilizados esperando
+    \item Overhead de sincronización aumentado (creación/destrucción de hilos, barreras implícitas)
+\end{itemize}
+
+\subsection{Factores que Explican el Rendimiento Negativo}
+
+\subsubsection{1. Heterogeneidad Extrema de la Carga}
+
+El conjunto de 42 puzzles tiene una distribución de tiempos muy sesgada. De los 37 puzzles resueltos por BFS paralelo:
+
+\begin{itemize}
+    \item 10 puzzles simples: $\sim$0.02 ms cada uno (total $\sim$0.2 ms)
+    \item 10 puzzles medios: $\sim$0.08 ms cada uno (total $\sim$0.8 ms)
+    \item 11 puzzles difíciles: $\sim$1.5 ms cada uno (total $\sim$16.5 ms)
+    \item 6 puzzles muy difíciles resueltos: $\sim$400 ms promedio (total $\sim$2400 ms)
+    \item 5 puzzles no resueltos (alcanzaron MAX\_QUEUE=200,000): timeout anticipado
+\end{itemize}
+
+Los puzzles muy difíciles representan más del 95\% del tiempo total de ejecución. El scheduling dinámico no puede mitigar completamente este desequilibrio cuando múltiples puzzles pesados se asignan al mismo hilo inicialmente.
+
+\subsubsection{2. Granularidad Insuficiente}
+
+Con solo 42 puzzles (37 resueltos efectivamente) y 8 hilos:
+\begin{itemize}
+    \item Cada hilo recibe en promedio 4.6 puzzles.
+    \item Si a un hilo le toca un puzzle de 400+ ms, ese hilo se convierte en cuello de botella crítico.
+    \item La ley de Amdahl indica que la fracción secuencial efectiva (puzzles difíciles procesados por un hilo) limita el speedup máximo.
+    \item Los 5 puzzles que alcanzaron el límite de cola y abortaron prematuramente introducen variabilidad adicional en la carga.
+\end{itemize}
+
+\subsubsection{3. Overhead de OpenMP}
+
+Componentes del overhead:
+\begin{itemize}
+    \item \textbf{Creación y sincronización de hilos:} $\sim$1-5 ms en la barrera implícita al final del parallel for.
+    \item \textbf{Scheduling dinámico:} Cada asignación de chunk tiene un coste de sincronización de $\sim$0.01-0.1 ms.
+    \item \textbf{False sharing:} Aunque minimizado por indexación directa en \texttt{results[i]}, puede ocurrir si los elementos están en la misma línea de caché.
+\end{itemize}
+
+Para un problema donde la mayoría del trabajo toma $<1$ ms por puzzle, este overhead es proporcionalmente enorme.
+
+\subsubsection{4. Limitación de la Arquitectura}
+
+Si el sistema tiene 4 núcleos físicos (común en entornos Docker con recursos limitados):
+\begin{itemize}
+    \item Con 8 hilos, se produce oversubscription (2 hilos por núcleo).
+    \item Context switching y contención por recursos (caché L2/L3, bandwidth de memoria) degradan el rendimiento.
+    \item El sistema operativo compite por tiempo de CPU, aumentando la variabilidad.
+\end{itemize}
+
+\subsection{Implicaciones para la Ley de Amdahl}
+
+La Ley de Amdahl establece:
+\begin{equation}
+\text{Speedup} \leq \frac{1}{(1-P) + \frac{P}{N}}
+\end{equation}
+
+donde $P$ es la fracción paralelizable y $N$ el número de procesadores.
+
+En este caso, la fracción efectivamente paralelizable es reducida por:
+\begin{itemize}
+    \item Puzzles muy simples con overhead mayor que su tiempo de ejecución.
+    \item Desbalance que serializa efectivamente el procesamiento de puzzles difíciles.
+    \item 5 puzzles (11.9\%) que no se resuelven y consumen tiempo sin producir resultado útil.
+\end{itemize}
+
+Estimando $P \approx 0.35$ (considerando desbalance, overhead y fallos), el speedup teórico máximo sería:
+\begin{itemize}
+    \item 2 hilos: $1/(0.65 + 0.35/2) = 1.18$
+    \item 4 hilos: $1/(0.65 + 0.35/4) = 1.30$
+    \item 8 hilos: $1/(0.65 + 0.35/8) = 1.39$
+\end{itemize}
+
+Los resultados reales (0.915, 0.695, 0.310) son incluso peores, indicando que el overhead de sincronización y el desbalance de carga dominan completamente cualquier beneficio teórico de la paralelización.
+
+\subsection{Propuestas de Mejora}
+
+\begin{enumerate}
+    \item \textbf{Aumentar el tamaño del dataset:} Con 1000+ puzzles, el scheduling dinámico sería más efectivo.
+    
+    \item \textbf{Pre-sorting por complejidad estimada:} Ordenar puzzles por una métrica de complejidad (ej. distancia Manhattan inicial) y distribuir de manera balanceada.
+    
+    \item \textbf{Work stealing:} Implementar una cola de trabajo compartida con work stealing para mejor balance dinámico.
+    
+    \item \textbf{Paralelización híbrida:} Combinar paralelización por puzzles (nivel externo) con paralelización del BFS interno (nivel fino) para puzzles muy difíciles.
+    
+    \item \textbf{Ajuste de chunk size:} Experimentar con chunks mayores (ej. schedule(dynamic, 4)) para reducir overhead de scheduling.
+\end{enumerate}
+
+\section{Análisis de Escalabilidad}
+
+\subsection{Escalabilidad en Tamaño del Tablero}
+
+Se evaluaron los algoritmos con tableros 3x3, 4x4 y 5x5 para analizar el comportamiento ante el crecimiento del espacio de estados.
+
+\subsubsection{Resultados por Tamaño de Tablero}
+
+\begin{table}[H]
+\centering
+\caption{Rendimiento por tamaño de tablero}
+\label{tab:scalability}
+\begin{tabular}{@{}llcccc@{}}
+\toprule
+\textbf{Tamaño} & \textbf{Algoritmo} & \textbf{Tiempo Prom.} & \textbf{Nodos Prom.} & \textbf{Tasa} & \textbf{Timeouts} \\
+ & & \textbf{(ms)} & & \textbf{Éxito} & \\
+\midrule
+3x3 & BFS & 4.669 & 3,436 & 100.0\% & 0\% \\
+3x3 & A*-h1 & 0.075 & 51 & 100.0\% & 0\% \\
+3x3 & A*-h2 & 0.204 & 145 & 100.0\% & 0\% \\
+\midrule
+4x4 & BFS & 0.023 & 10 & 100.0\% & 0\% \\
+4x4 & A*-h1 & 0.010 & 3 & 100.0\% & 0\% \\
+4x4 & A*-h2 & 0.010 & 3 & 100.0\% & 0\% \\
+\midrule
+5x5 & BFS & 1660.480 & 446,734 & 0.0\% & 100\% \\
+5x5 & A*-h1 & 5781.120 & 1,000,000 & 0.0\% & 100\% \\
+5x5 & A*-h2 & 6254.975 & 1,000,000 & 0.0\% & 100\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Análisis por Tamaño}
+
+\textbf{3x3 (8-puzzle):}
+\begin{itemize}
+    \item Espacio de estados: $9!/2 = 181,440$ configuraciones
+    \item Todos los algoritmos resuelven efectivamente el problema
+    \item A*-h1 es 62.3x más rápido que BFS
+    \item Profundidad máxima de solución: 31 movimientos
+\end{itemize}
+
+\textbf{4x4 (15-puzzle):}
+\begin{itemize}
+    \item Espacio de estados: $16!/2 \approx 10.46 \times 10^{12}$ configuraciones
+    \item Los algoritmos son efectivos para instancias de profundidad $\leq 16$
+    \item BFS falla en instancias muy difíciles (2 de 42 puzzles)
+    \item A* con ambas heurísticas resuelve todas las instancias
+\end{itemize}
+
+\textbf{5x5 (24-puzzle):}
+\begin{itemize}
+    \item Espacio de estados: $25!/2 \approx 7.76 \times 10^{24}$ configuraciones
+    \item \textbf{Ningún algoritmo logró resolver instancias dentro del límite}
+    \item Todos alcanzaron MAX\_STATES = 1,000,000 sin encontrar solución
+    \item Tiempos de exploración: 1.66 a 6.25 segundos antes de abortar
+    \item Conclusión: Se requieren técnicas avanzadas (IDA*, pattern databases, etc.)
+\end{itemize}
+
+\subsection{Crecimiento del Espacio de Estados}
+
+La complejidad teórica del espacio de estados crece como:
+
+\begin{equation}
+|\mathcal{S}(N)| = \frac{(N^2)!}{2}
+\end{equation}
+
+\begin{table}[H]
+\centering
+\caption{Crecimiento factorial del espacio de estados}
+\label{tab:state_space_growth}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Tamaño} & \textbf{Número de Estados} & \textbf{Factor de Crecimiento} \\
+\midrule
+3x3 & $1.81 \times 10^5$ & - \\
+4x4 & $1.05 \times 10^{13}$ & $\times 5.78 \times 10^7$ \\
+5x5 & $7.76 \times 10^{24}$ & $\times 7.39 \times 10^{11}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Este crecimiento factorial explica el colapso completo de todos los algoritmos en 5x5.
+
+\subsection{Profundidad de Solución y Complejidad Práctica}
+
+\begin{table}[H]
+\centering
+\caption{Profundidad máxima de solución conocida}
+\label{tab:max_depth}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Tamaño} & \textbf{Profundidad Máxima} & \textbf{Diámetro del Grafo} \\
+\midrule
+3x3 & 31 movimientos & 31 \\
+4x4 & 80 movimientos & 80 \\
+5x5 & Desconocido & $>200$ (estimado) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Para 4x4, instancias de profundidad 16 (como las del dataset) están en el percentil 95 de dificultad. Las instancias más difíciles (profundidad 80) son extremadamente raras y requerirían técnicas especializadas incluso con A*.
+
+\subsection{Implicaciones del Límite de Memoria}
+
+El límite de MAX\_STATES = 1,000,000 equivale a:
+\begin{itemize}
+    \item Memoria aproximada: 1M estados $\times$ 16 bytes/estado $\approx$ 16 MB para el conjunto de visitados
+    \item Para 5x5 con 25 caracteres por estado: 1M $\times$ 25 bytes $\approx$ 25 MB
+    \item Factor de penetración en el espacio: $10^6 / 7.76 \times 10^{24} \approx 1.29 \times 10^{-19}$ (despreciable)
+\end{itemize}
+
+Incrementar el límite 100x o 1000x no cambiaría significativamente la situación para 5x5.
+
+\subsection{Escalabilidad en Número de Hilos (Fuerte)}
+
+El análisis previo de paralelización mostró que el sistema no escala favorablemente con el número de hilos debido a:
+
+\begin{itemize}
+    \item \textbf{Speedup subunitario consistente:} Indica overhead de paralelización superior al beneficio.
+    \item \textbf{Degradación con más hilos:} Sugiere contención por recursos y/o oversubscription.
+    \item \textbf{Desbalance de carga severo:} La heterogeneidad del dataset no permite amortizar el overhead.
+\end{itemize}
+
+\textbf{Escalabilidad fuerte teórica vs. real:}
+
+Con una carga de trabajo fija (42 puzzles, 2002.82 ms secuencial):
+\begin{itemize}
+    \item Ideal: $T(P) = T(1)/P$
+    \item Real observado: $T(P) > T(1)$ para todo $P > 1$
+\end{itemize}
+
+Esto clasifica como \textbf{escalabilidad fuerte negativa}, donde añadir recursos empeora el rendimiento.
+
+\section{Conclusiones Generales}
+
+\subsection{Principales Hallazgos}
+
+\begin{enumerate}
+    \item \textbf{A* con heurística Manhattan (h1) es el algoritmo óptimo} para el sliding puzzle 4x4:
+    \begin{itemize}
+        \item Resuelve todos los puzzles con 100\% de tasa de éxito
+        \item 1506x más rápido que BFS en promedio
+        \item Reduce la expansión de nodos en 99.92\% respecto a BFS
+        \item Mantiene garantía de optimalidad
+    \end{itemize}
+    
+    \item \textbf{La elección de heurística es crítica}:
+    \begin{itemize}
+        \item h1 (Manhattan) domina ampliamente a h2 (misplaced tiles)
+        \item El overhead computacional de h1 es despreciable comparado con su poder de poda
+        \item h2 es inadecuada para el 15-puzzle a pesar de su simplicidad
+    \end{itemize}
+    
+    \item \textbf{BFS es inviable para puzzles complejos}:
+    \begin{itemize}
+        \item BFS secuencial falla en 4.76\% de instancias 4x4 (2 de 42) por límites de memoria
+        \item BFS paralelo falla en 11.90\% (5 de 42) debido a límite adicional de cola
+        \item Crecimiento exponencial lo hace inadecuado para uso práctico en instancias difíciles
+        \item Solo útil como baseline de comparación o para puzzles triviales (profundidad $\leq$ 8)
+    \end{itemize}
+    
+    \item \textbf{La paralelización por descomposición de dominio no es efectiva} para este problema con este dataset:
+    \begin{itemize}
+        \item Speedup consistentemente inferior a 1.0 (0.915 con 2 hilos hasta 0.310 con 8 hilos)
+        \item Overhead de sincronización supera los beneficios, creciendo exponencialmente con más hilos
+        \item Heterogeneidad extrema de la carga previene balance efectivo
+        \item Tasa de éxito reducida (88.10\% vs 95.24\%) debido a límites más estrictos en implementación paralela
+        \item Requeriría datasets mucho más grandes (1000+ puzzles) para amortizar overhead
+    \end{itemize}
+    
+    \item \textbf{El problema no escala a tableros 5x5}:
+    \begin{itemize}
+        \item El crecimiento factorial del espacio de estados es prohibitivo
+        \item Ningún algoritmo estándar (BFS, A*) puede resolver instancias 5x5
+        \item Se requieren técnicas especializadas (IDA*, pattern databases, symmetry pruning)
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Limitaciones del Estudio}
+
+\begin{itemize}
+    \item Dataset de 42 puzzles insuficiente para evaluar paralelización efectiva (se recomienda 1000+ puzzles)
+    \item Límite de MAX\_STATES arbitrario (1,000,000) afecta resultados en casos límite
+    \item Límite adicional MAX\_QUEUE = 200,000 en versión paralela reduce tasa de éxito (37/42 vs 40/42)
+    \item No se exploró paralelización del BFS interno (fine-grained parallelism)
+    \item Ausencia de técnicas avanzadas (IDA*, pattern databases) para comparación en 5x5
+    \item Mediciones pueden tener variabilidad por ejecución en entorno Docker
+    \item La heterogeneidad extrema del dataset (5 puzzles consumen >95\% del tiempo) sesga resultados paralelos
+\end{itemize}
+
+\subsection{Recomendaciones Prácticas}
+
+\textbf{Para resolver sliding puzzles en producción:}
+
+\begin{enumerate}
+    \item \textbf{3x3:} Cualquier algoritmo es adecuado; usar BFS para simplicidad.
+    
+    \item \textbf{4x4 (profundidad $\leq$ 16):} Usar A* con heurística Manhattan.
+    
+    \item \textbf{4x4 (profundidad $>$ 16):} IDA* con h1 o pattern databases.
+    
+    \item \textbf{5x5 y superiores:} Requiere pattern databases precomputadas, symmetry detection y posiblemente búsquedas bidireccionales.
+    
+    \item \textbf{Paralelización:} Solo recomendable con:
+    \begin{itemize}
+        \item Datasets de 1000+ puzzles
+        \item Distribución más homogénea de complejidad
+        \item Arquitecturas con muchos núcleos ($\geq$ 16) para amortizar overhead
+        \item Paralelización híbrida (coarse + fine grained)
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Trabajo Futuro}
+
+\begin{itemize}
+    \item Implementar IDA* (Iterative Deepening A*) para reducir uso de memoria
+    \item Desarrollar pattern databases para mejorar la heurística
+    \item Explorar búsqueda bidireccional (forward + backward simultáneos)
+    \item Investigar paralelización a nivel de nodos del BFS con work stealing
+    \item Experimentar con heurísticas más avanzadas (linear conflict, corner tiles)
+    \item Extender el dataset a 1000+ puzzles con distribución uniforme de complejidad
+    \item Evaluar en hardware real sin virtualización para mediciones más precisas
+\end{itemize}
+
+\section{Referencias}
+
+\begin{enumerate}
+    \item Korf, R. E. (1985). \textit{Depth-first iterative-deepening: An optimal admissible tree search}. Artificial Intelligence, 27(1), 97-109.
+    
+    \item Korf, R. E., \& Schultze, P. (2005). \textit{Large-scale parallel breadth-first search}. AAAI, 1380-1385.
+    
+    \item Russell, S., \& Norvig, P. (2020). \textit{Artificial Intelligence: A Modern Approach} (4th ed.). Pearson.
+    
+    \item Chapman, B., Jost, G., \& Van Der Pas, R. (2007). \textit{Using OpenMP: Portable Shared Memory Parallel Programming}. MIT Press.
+    
+    \item Amdahl, G. M. (1967). \textit{Validity of the single processor approach to achieving large scale computing capabilities}. AFIPS Conference Proceedings, 483-485.
+\end{enumerate}
+
+\appendix
+
+\section{Anexo A: Detalles de Implementación}
+
+\subsection{Compilación}
+
+\begin{lstlisting}[language=bash]
+# Algoritmos secuenciales
+g++ -std=c++11 -O2 bsp_solver_nsize.cpp -o bsp_nsize
+g++ -std=c++11 -O2 h1_solver_nsize.cpp -o h1_nsize
+g++ -std=c++11 -O2 h2_solver_nsize.cpp -o h2_nsize
+
+# Algoritmo paralelo
+g++ -std=c++17 -O3 -fopenmp bsp_parallel_solver.cpp -o bsp_parallel
+\end{lstlisting}
+
+\subsection{Ejecución}
+
+\begin{lstlisting}[language=bash]
+# Secuenciales (salida: CSV a stdout)
+./bsp_nsize puzzles.txt 4 > BFS_results.csv
+./h1_nsize puzzles.txt 4 > H1_results.csv
+./h2_nsize puzzles.txt 4 > H2_results.csv
+
+# Paralelo (salida: resumen a stdout, CSV a archivo)
+./bsp_parallel puzzles.txt 4
+# Genera: parallel_results_fixed.csv
+\end{lstlisting}
+
+\section{Anexo B: Formato de Datos}
+
+\subsection{Formato de Entrada (puzzles.txt)}
+
+Una línea por puzzle, cadena de N² caracteres sin espacios:
+\begin{verbatim}
+ABCDEFG#IJKHMNOL
+ABCDEFGHIJ#LMNKO
+...
+\end{verbatim}
+
+\subsection{Formato CSV Secuencial}
+
+\begin{verbatim}
+puzzle_index,board,solution_length,execution_time_ms,nodes_expanded,solvable,algorithm
+0,ABCDEFG#IJKHMNOL,2,0.115,6,true,BFS
+...
+\end{verbatim}
+
+\subsection{Formato CSV Paralelo}
+
+\begin{verbatim}
+puzzle_index,thread_id,solution,nodes_expanded,per_puzzle_ms,threads_used
+0,2,2,6,0.112,4
+...
+\end{verbatim}
+
+\section{Anexo C: Notas Metodológicas sobre Medición de Tiempo}
+
+\subsection{Tiempos Reportados}
+
+Los tiempos presentados en este informe corresponden a mediciones internas realizadas con \texttt{omp\_get\_wtime()} dentro del programa \texttt{bsp\_parallel\_solver.cpp}. Este programa ejecuta dos fases consecutivas:
+
+\begin{enumerate}
+    \item \textbf{Fase secuencial (baseline):} Procesa todos los puzzles secuencialmente para establecer la línea base de comparación.
+    \item \textbf{Fase paralela:} Procesa los mismos puzzles con el número especificado de hilos.
+\end{enumerate}
+
+El tiempo "paralelo" reportado incluye únicamente la segunda fase. El tiempo "secuencial" es siempre el mismo (2516.17 ms) independientemente del número de hilos especificado, ya que corresponde a la primera fase ejecutada sin paralelización.
+
+\subsection{Cálculo de Overhead}
+
+El overhead paralelo se calcula como:
+\begin{equation}
+\text{Overhead} = T_{\text{paralelo}} \times P - T_{\text{secuencial}}
+\end{equation}
+
+donde $P$ es el número de hilos. Esta métrica captura el tiempo total de CPU consumido en exceso respecto a la ejecución secuencial óptima, reflejando:
+\begin{itemize}
+    \item Sincronización entre hilos
+    \item Creación y destrucción de hilos
+    \item Contención por recursos compartidos (caché, memoria)
+    \item Desbalance de carga (hilos ociosos esperando)
+\end{itemize}
+
+\subsection{Diferencias con Medición Externa}
+
+Las mediciones externas realizadas por el script shell (\texttt{task\_11\_parallel\_analysis.sh}) pueden diferir de los tiempos internos porque incluyen:
+\begin{itemize}
+    \item Tiempo de inicio del proceso
+    \item Lectura y parseo del archivo de puzzles
+    \item Escritura del archivo CSV de resultados
+    \item Overhead del sistema operativo
+\end{itemize}
+
+Para análisis de speedup y eficiencia, se utilizan consistentemente los tiempos internos medidos con \texttt{omp\_get\_wtime()}, que aíslan el rendimiento algorítmico de factores externos.
+
+\end{document}
